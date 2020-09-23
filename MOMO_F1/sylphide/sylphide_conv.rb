@@ -65,12 +65,16 @@ posvel2ubx = proc{|out|
   open(File::join(opt[:data_dir], opt[:posvel])){|io|
     header = io.readline.chomp.split(/, */)
     index_t = header.index("T[s]")
-    index_pos, index_vel = [
+    index_pos, index_vel, index_posacc, index_velacc = [
       ["ecef_x[m]","ecef_y[m]","ecef_z[m]"],
       ["ecef_vx[m/s]","ecef_vy[m/s]","ecef_vz[m/s]"],
+      ["ecef_x_acc[m]","ecef_y_acc[m]","ecef_z_acc[m]"],
+      ["ecef_vx_acc[m/s]","ecef_vy_acc[m/s]","ecef_vz_acc[m/s]"],
     ].collect{|k_s| 
       k_s.collect{|k| header.index(k)}
     }
+    index_posacc = nil unless index_posacc.all?
+    index_velacc = nil unless index_velacc.all?
     
     timegps = proc{
       t_previous = 0
@@ -101,6 +105,32 @@ posvel2ubx = proc{|out|
       pos_llh = pos_ecef.llh
       vel_enu = System_ENU.relative_rel(vel_ecef, pos_ecef)
     
+      # 精度関係の処理
+      acc = {
+        :pAcc_cm => 1200,
+        :hAcc_mm => 3000,
+        :vAcc_mm => 10000,
+        :sAcc_cms => 50,
+        :cAcc_deg => 0.5,
+      }
+      
+      if index_posacc then
+        posacc = values.values_at(*index_posacc).collect{|str| str.to_f}
+        acc[:pAcc_cm] = Math::sqrt(posacc.collect{|v|
+          (1E2 * v.to_f) ** 2 # m => cm^2
+        }.inject{|memo, v| memo + v})
+        posacc_enu = System_ENU.relative_rel(System_XYZ::new(*posacc), pos_ecef)
+        acc[:hAcc_mm] = Math::sqrt((posacc_enu[0] ** 2) + (posacc_enu[1] ** 2))
+        acc[:vAcc_mm] = posacc_enu[2].abs
+      end
+      
+      if index_velacc then
+        velacc = values.values_at(*index_velacc).collect{|str| str.to_f}
+        acc[:sAcc_cms] = Math::sqrt(velacc.collect{|v|
+          (1E2 * v.to_f) ** 2 # m => cm^2
+        }.inject{|memo, v| memo + v})
+      end
+      
       # 0x01 0x20/0x06/0x02/0x12 が必要
       itow = [(1E3 * t).to_i].pack('V')
       
@@ -115,9 +145,9 @@ posvel2ubx = proc{|out|
           0x03, # 3D-Fix
           0x0D, # GPSfixOK, WKNSET, TOWSET
           pos_ecef.to_a.collect{|v| (v * 1E2).to_i}, # ECEF_XYZ [cm]
-          0, # 3D pos accuracy [cm]
+          acc[:pAcc_cm].to_i, # 3D pos accuracy [cm]
           vel_ecef.to_a.collect{|v| (v * 1E2).to_i}, # ECEF_VXYZ [cm/s]
-          0, # Speed accuracy [cm/s]
+          acc[:sAcc_cms].to_i, # Speed accuracy [cm/s]
           [0] * 8].flatten.pack('Vvc2l<3Vl<3Vc8')
       ubx_sol << UBX::checksum(ubx_sol.unpack('c*'), 2..-1).pack('c2')
       out.print ubx_sol
@@ -129,8 +159,8 @@ posvel2ubx = proc{|out|
           (pos_llh.lat / Math::PI * 180 * 1E7).to_i, # 緯度 [1E-7 deg]
           (pos_llh.h * 1E3).to_i, # 楕円高度 [mm]
           0, # 平均海面高度
-          3000, # HAcc [mm]
-          10000, # VAcc [mm]
+          acc[:hAcc_mm].to_i, # HAcc [mm]
+          acc[:vAcc_mm].to_i, # VAcc [mm]
           ].pack('V*')
       ubx_posllh << UBX::checksum(ubx_posllh.unpack('c*'), 2..-1).pack('c2')
       out.print ubx_posllh
@@ -147,8 +177,8 @@ posvel2ubx = proc{|out|
           (Math::sqrt(speed_pow2) * 1E2).to_i, # 3D速度 [cm/s]
           (speed_2D * 1E2).to_i, # 2D速度 [cm/s]
           (speed_dir / Math::PI * 180 * 1E5).to_i, # ヘディング [1E-5 deg]
-          50, # 速度精度 [cm/s]
-          (0.5 * 1E5).to_i, # ヘディング精度 [1E-5 deg]
+          acc[:sAcc_cms].to_i, # sAcc 速度精度 [cm/s]
+          (acc[:cAcc_deg] * 1E5).to_i, # cAcc ヘディング精度 [1E-5 deg]
           ].pack('V*')
       ubx_velned << UBX::checksum(ubx_velned.unpack('c*'), 2..-1).pack('c2')
       out.print ubx_velned
