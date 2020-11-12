@@ -120,8 +120,8 @@ posvel2ubx = proc{|out|
           (1E2 * v.to_f) ** 2 # m => cm^2
         }.inject{|memo, v| memo + v})
         posacc_enu = System_ENU.relative_rel(System_XYZ::new(*posacc), pos_ecef)
-        acc[:hAcc_mm] = Math::sqrt((posacc_enu[0] ** 2) + (posacc_enu[1] ** 2))
-        acc[:vAcc_mm] = posacc_enu[2].abs
+        acc[:hAcc_mm] = 1E3 * Math::sqrt((posacc_enu[0] ** 2) + (posacc_enu[1] ** 2)) # m => mm
+        acc[:vAcc_mm] = 1E3 * posacc_enu[2].abs # m => mm
       end
       
       if index_velacc then
